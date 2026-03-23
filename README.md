@@ -24,7 +24,7 @@ gh extension install ghcli/gh-replay-alerts
 - Python dependencies:
 
 ```bash
-pip install -r "$(gh extension list | grep replay-alerts | awk '{print $3}')/requirements.txt"
+pip install tqdm defusedcsv requests
 ```
 
 ## Usage
