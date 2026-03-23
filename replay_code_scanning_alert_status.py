@@ -3,6 +3,7 @@
 """Replay code scanning alert status for a GitHub repository, organization or Enterprise, based on a provide file of previous statuses."""
 
 import sys
+import os
 import argparse
 import re
 import logging
@@ -227,7 +228,8 @@ def add_args(parser: argparse.ArgumentParser) -> None:
 
 def main() -> None:
     """CLI entrypoint."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    prog = os.environ.get("GH_PROG_NAME")
+    parser = argparse.ArgumentParser(description=__doc__, prog=prog)
     add_args(parser)
     args = parser.parse_args()
 

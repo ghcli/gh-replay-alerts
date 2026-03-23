@@ -23,7 +23,7 @@ fi
 case "${1:-}" in
     list)
         shift
-        exec python3 "${SCRIPT_DIR}/list_code_scanning_alerts.py" "$@"
+        GH_PROG_NAME="gh replay-alerts list" exec python3 "${SCRIPT_DIR}/list_code_scanning_alerts.py" "$@"
         ;;
     help|--help|-h)
         echo "Usage: gh replay-alerts <command> [options]"
@@ -40,6 +40,6 @@ case "${1:-}" in
         exit 0
         ;;
     *)
-        exec python3 "${SCRIPT_DIR}/replay_code_scanning_alert_status.py" "$@"
+        GH_PROG_NAME="gh replay-alerts" exec python3 "${SCRIPT_DIR}/replay_code_scanning_alert_status.py" "$@"
         ;;
 esac

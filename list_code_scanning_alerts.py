@@ -3,6 +3,7 @@
 """List code scanning alerts for a GitHub repository, organization or Enterprise."""
 
 import sys
+import os
 import argparse
 import logging
 import datetime
@@ -185,7 +186,8 @@ def add_args(parser: argparse.ArgumentParser) -> None:
 
 def main() -> None:
     """CLI entrypoint."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    prog = os.environ.get("GH_PROG_NAME")
+    parser = argparse.ArgumentParser(description=__doc__, prog=prog)
     add_args(parser)
     args = parser.parse_args()
 
