@@ -5,6 +5,7 @@ set -euo pipefail
 # Replays code scanning alert statuses from a CSV export onto current alerts.
 #
 # Usage:
+#   gh replay-alerts list owner/repo --scope repo > alerts.csv
 #   cat alerts.csv | gh replay-alerts owner/repo --scope repo
 #   gh replay-alerts my-org --scope org < alerts.csv
 
@@ -18,4 +19,27 @@ if [[ -z "${GITHUB_TOKEN}" ]]; then
     exit 1
 fi
 
-exec python3 "${SCRIPT_DIR}/replay_code_scanning_alert_status.py" "$@"
+# Route subcommands
+case "${1:-}" in
+    list)
+        shift
+        exec python3 "${SCRIPT_DIR}/list_code_scanning_alerts.py" "$@"
+        ;;
+    help|--help|-h)
+        echo "Usage: gh replay-alerts <command> [options]"
+        echo ""
+        echo "Commands:"
+        echo "  list <name> --scope repo|org|ent   Export code scanning alerts as CSV"
+        echo "  <name> --scope repo|org|ent        Replay alert states from CSV (stdin)"
+        echo ""
+        echo "Examples:"
+        echo "  gh replay-alerts list owner/repo --scope repo > alerts.csv"
+        echo "  cat alerts.csv | gh replay-alerts owner/repo --scope repo"
+        echo "  gh replay-alerts list owner/repo --scope repo --json"
+        echo "  cat alerts.csv | gh replay-alerts owner/repo --scope repo --debug"
+        exit 0
+        ;;
+    *)
+        exec python3 "${SCRIPT_DIR}/replay_code_scanning_alert_status.py" "$@"
+        ;;
+esac

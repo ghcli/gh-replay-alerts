@@ -30,7 +30,13 @@ pip install -r "$(gh extension list | grep replay-alerts | awk '{print $3}')/req
 ## Usage
 
 ```bash
-# Replay alert states for a specific repo
+# Export current alerts as CSV
+gh replay-alerts list owner/repo --scope repo > alerts.csv
+
+# Export as JSON
+gh replay-alerts list owner/repo --scope repo --json
+
+# Replay alert states from CSV
 cat alerts.csv | gh replay-alerts owner/repo --scope repo
 
 # Replay for an entire org
@@ -42,17 +48,14 @@ cat alerts.csv | gh replay-alerts owner/repo --scope repo --debug
 # Filter by state
 cat alerts.csv | gh replay-alerts owner/repo --scope repo --state open
 
+# Filter by date
+gh replay-alerts list owner/repo --scope repo --since 7d > recent.csv
+
 # GitHub Enterprise Server
-cat alerts.csv | gh replay-alerts owner/repo --scope repo --hostname ghes.example.com
-```
+gh replay-alerts list owner/repo --scope repo --hostname ghes.example.com > alerts.csv
 
-## Generating the CSV Input
-
-Use the companion `list_code_scanning_alerts.py` script (included) to export current alert states:
-
-```bash
-export GITHUB_TOKEN=$(gh auth token)
-python3 list_code_scanning_alerts.py owner/repo --scope repo > alerts.csv
+# Show help
+gh replay-alerts help
 ```
 
 ## Output
@@ -87,16 +90,27 @@ WARNING:   → 12 alerts matched repo+path but NOT line/column — code edits sh
 
 The script exits with code 1 when CSV has data but zero alerts matched.
 
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `gh replay-alerts list <name> [options]` | Export code scanning alerts as CSV (or JSON) |
+| `gh replay-alerts <name> [options]` | Replay alert states from CSV on stdin |
+| `gh replay-alerts help` | Show usage help |
+
 ## Options
 
-| Flag | Description |
-|------|-------------|
-| `name` | Repository (`owner/repo`), org, or Enterprise name |
-| `--scope` | `repo`, `org`, or `ent` (default: `org`) |
-| `--state` | Filter: `open` or `resolved` |
-| `--since` | Only alerts after date (`2024-10-08`, `7d`) |
-| `--hostname` | GHES hostname (default: `github.com`) |
-| `--debug` | Enable debug logging |
+| Flag | Applies to | Description |
+|------|-----------|-------------|
+| `name` | both | Repository (`owner/repo`), org, or Enterprise name |
+| `--scope` | both | `repo`, `org`, or `ent` (default: `org`) |
+| `--state` | both | Filter: `open` or `resolved` |
+| `--since` | both | Only alerts after date (`2024-10-08`, `7d`) |
+| `--hostname` | both | GHES hostname (default: `github.com`) |
+| `--debug` | both | Enable debug logging |
+| `--json` | list | Output JSON instead of CSV |
+| `--raw` | list | Output raw API JSON |
+| `--quote-all` | list | Quote all CSV fields |
 
 ## How Matching Works
 
