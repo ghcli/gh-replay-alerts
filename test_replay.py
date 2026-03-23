@@ -8,7 +8,8 @@ from unittest.mock import patch, MagicMock
 from defusedcsv import csv
 
 from replay_code_scanning_alert_status import (
-    existing_results_by_location,
+    index_csv,
+    extract_alert_number,
     update_states,
 )
 
@@ -73,89 +74,143 @@ def make_api_alert(
     }
 
 
-class TestExistingResultsByLocation(unittest.TestCase):
-    """Tests for CSV indexing."""
+class TestExtractAlertNumber(unittest.TestCase):
+    """Tests for URL-based alert number extraction."""
+
+    def test_standard_url(self):
+        self.assertEqual(extract_alert_number("https://github.com/owner/repo/security/code-scanning/42"), "42")
+
+    def test_single_digit(self):
+        self.assertEqual(extract_alert_number("https://github.com/owner/repo/security/code-scanning/1"), "1")
+
+    def test_large_number(self):
+        self.assertEqual(extract_alert_number("https://github.com/owner/repo/security/code-scanning/99999"), "99999")
+
+    def test_no_match(self):
+        self.assertIsNone(extract_alert_number("https://github.com/owner/repo/issues/1"))
+
+    def test_empty_string(self):
+        self.assertIsNone(extract_alert_number(""))
+
+    def test_ghes_url(self):
+        self.assertEqual(extract_alert_number("https://ghes.example.com/owner/repo/security/code-scanning/5"), "5")
+
+
+class TestIndexCsv(unittest.TestCase):
+    """Tests for CSV dual-indexing (by number + by location)."""
 
     def test_empty_csv(self):
-        reader = make_csv_reader([])
-        result = existing_results_by_location(reader)
-        self.assertEqual(result, {})
+        by_number, by_location, count = index_csv(make_csv_reader([]))
+        self.assertEqual(count, 0)
+        self.assertEqual(by_number, {})
+        self.assertEqual(by_location, {})
 
-    def test_single_row(self):
-        row = make_csv_row()
-        reader = make_csv_reader([row])
-        result = existing_results_by_location(reader)
+    def test_single_row_indexes_both(self):
+        row = make_csv_row(url="https://github.com/owner/repo/security/code-scanning/7")
+        by_number, by_location, count = index_csv(make_csv_reader([row]))
 
-        self.assertIn("owner/repo", result)
-        self.assertIn("src/main.py", result["owner/repo"])
-        self.assertIn((10, 5), result["owner/repo"]["src/main.py"])
-        self.assertIn((10, 20), result["owner/repo"]["src/main.py"][(10, 5)])
+        self.assertEqual(count, 1)
+        self.assertIn(("owner/repo", "7"), by_number)
+        self.assertIn("owner/repo", by_location)
+        self.assertIn("src/main.py", by_location["owner/repo"])
 
     def test_multiple_repos(self):
         rows = [
-            make_csv_row(repo="org/repo-a", path="a.py"),
-            make_csv_row(repo="org/repo-b", path="b.py"),
+            make_csv_row(repo="org/repo-a", path="a.py", url="https://github.com/org/repo-a/security/code-scanning/1"),
+            make_csv_row(repo="org/repo-b", path="b.py", url="https://github.com/org/repo-b/security/code-scanning/1"),
         ]
-        reader = make_csv_reader(rows)
-        result = existing_results_by_location(reader)
+        by_number, by_location, count = index_csv(make_csv_reader(rows))
 
-        self.assertEqual(len(result), 2)
-        self.assertIn("org/repo-a", result)
-        self.assertIn("org/repo-b", result)
+        self.assertEqual(len(by_location), 2)
+        self.assertIn(("org/repo-a", "1"), by_number)
+        self.assertIn(("org/repo-b", "1"), by_number)
 
-    def test_multiple_files_same_repo(self):
-        rows = [
-            make_csv_row(path="file1.py"),
-            make_csv_row(path="file2.py"),
-        ]
-        reader = make_csv_reader(rows)
-        result = existing_results_by_location(reader)
+    def test_url_without_alert_number_still_indexes_location(self):
+        row = make_csv_row(url="https://github.com/owner/repo/issues/1")
+        by_number, by_location, count = index_csv(make_csv_reader([row]))
 
-        self.assertEqual(len(result["owner/repo"]), 2)
-
-    def test_multiple_locations_same_file(self):
-        rows = [
-            make_csv_row(start_line=10, end_line=10),
-            make_csv_row(start_line=20, end_line=20),
-        ]
-        reader = make_csv_reader(rows)
-        result = existing_results_by_location(reader)
-
-        file_results = result["owner/repo"]["src/main.py"]
-        self.assertIn((10, 5), file_results)
-        self.assertIn((20, 5), file_results)
-
-    def test_duplicate_location_keeps_last(self):
-        rows = [
-            make_csv_row(state="open"),
-            make_csv_row(state="dismissed"),
-        ]
-        reader = make_csv_reader(rows)
-        result = existing_results_by_location(reader)
-
-        stored = result["owner/repo"]["src/main.py"][(10, 5)][(10, 20)]
-        self.assertEqual(stored["state"], "dismissed")
+        self.assertEqual(len(by_number), 0)
+        self.assertIn("owner/repo", by_location)
 
 
 class TestUpdateStates(unittest.TestCase):
-    """Tests for alert matching and state update logic."""
+    """Tests for cascading match: alert number → location fallback."""
+
+    def _index(self, rows):
+        return index_csv(make_csv_reader(rows))
 
     def test_no_api_alerts(self):
-        existing = existing_results_by_location(make_csv_reader([make_csv_row()]))
-        stats = update_states("github.com", iter([]), existing)
+        by_number, by_location, _ = self._index([make_csv_row()])
+        stats = update_states("github.com", iter([]), by_number, by_location)
 
         self.assertEqual(stats["api_alerts"], 0)
         self.assertEqual(stats["matched"], 0)
-        self.assertEqual(stats["unmatched"], 0)
+
+    def test_match_by_alert_number(self):
+        """Same alert number, different line — should match by number."""
+        csv_row = make_csv_row(
+            start_line=10, state="dismissed",
+            url="https://github.com/owner/repo/security/code-scanning/42",
+        )
+        by_number, by_location, _ = self._index([csv_row])
+        api_alert = make_api_alert(
+            start_line=99,  # line changed!
+            state="open",
+            url="https://github.com/owner/repo/security/code-scanning/42",
+        )
+
+        with patch("replay_code_scanning_alert_status.change_state"):
+            stats = update_states("github.com", iter([api_alert]), by_number, by_location)
+
+        self.assertEqual(stats["matched"], 1)
+        self.assertEqual(stats["matched_by_number"], 1)
+        self.assertEqual(stats["matched_by_location"], 0)
+        self.assertEqual(stats["state_changed"], 1)
+
+    def test_fallback_to_location_when_no_number(self):
+        """No alert number in URL — falls back to location match."""
+        csv_row = make_csv_row(
+            start_line=10, state="open",
+            url="https://github.com/owner/repo/issues/1",  # not a code-scanning URL
+        )
+        by_number, by_location, _ = self._index([csv_row])
+        api_alert = make_api_alert(
+            start_line=10, state="open",
+            url="https://github.com/owner/repo/issues/1",
+        )
+
+        stats = update_states("github.com", iter([api_alert]), by_number, by_location)
+
+        self.assertEqual(stats["matched"], 1)
+        self.assertEqual(stats["matched_by_number"], 0)
+        self.assertEqual(stats["matched_by_location"], 1)
+
+    def test_fallback_to_location_when_number_doesnt_match(self):
+        """Alert number in CSV doesn't match API — falls back to location."""
+        csv_row = make_csv_row(
+            start_line=10, state="dismissed",
+            url="https://github.com/owner/repo/security/code-scanning/1",
+        )
+        by_number, by_location, _ = self._index([csv_row])
+        api_alert = make_api_alert(
+            start_line=10, state="open",
+            url="https://github.com/owner/repo/security/code-scanning/999",  # different number
+        )
+
+        with patch("replay_code_scanning_alert_status.change_state"):
+            stats = update_states("github.com", iter([api_alert]), by_number, by_location)
+
+        self.assertEqual(stats["matched"], 1)
+        self.assertEqual(stats["matched_by_number"], 0)
+        self.assertEqual(stats["matched_by_location"], 1)
 
     def test_exact_match_same_state(self):
         csv_row = make_csv_row(state="open")
-        existing = existing_results_by_location(make_csv_reader([csv_row]))
+        by_number, by_location, _ = self._index([csv_row])
         api_alert = make_api_alert(state="open")
 
-        stats = update_states("github.com", iter([api_alert]), existing)
+        stats = update_states("github.com", iter([api_alert]), by_number, by_location)
 
-        self.assertEqual(stats["api_alerts"], 1)
         self.assertEqual(stats["matched"], 1)
         self.assertEqual(stats["state_same"], 1)
         self.assertEqual(stats["state_changed"], 0)
@@ -163,10 +218,10 @@ class TestUpdateStates(unittest.TestCase):
     @patch("replay_code_scanning_alert_status.change_state")
     def test_state_mismatch_triggers_change(self, mock_change):
         csv_row = make_csv_row(state="dismissed")
-        existing = existing_results_by_location(make_csv_reader([csv_row]))
+        by_number, by_location, _ = self._index([csv_row])
         api_alert = make_api_alert(state="open")
 
-        stats = update_states("github.com", iter([api_alert]), existing)
+        stats = update_states("github.com", iter([api_alert]), by_number, by_location)
 
         self.assertEqual(stats["matched"], 1)
         self.assertEqual(stats["state_changed"], 1)
@@ -174,77 +229,91 @@ class TestUpdateStates(unittest.TestCase):
 
     def test_repo_mismatch(self):
         csv_row = make_csv_row(repo="org/repo-a")
-        existing = existing_results_by_location(make_csv_reader([csv_row]))
-        api_alert = make_api_alert(repo="org/repo-b")
+        by_number, by_location, _ = self._index([csv_row])
+        api_alert = make_api_alert(repo="org/repo-b", url="https://github.com/org/repo-b/security/code-scanning/99")
 
-        stats = update_states("github.com", iter([api_alert]), existing)
+        stats = update_states("github.com", iter([api_alert]), by_number, by_location)
 
         self.assertEqual(stats["unmatched"], 1)
         self.assertEqual(stats["miss_repo"], 1)
 
     def test_path_mismatch(self):
-        csv_row = make_csv_row(path="old_file.py")
-        existing = existing_results_by_location(make_csv_reader([csv_row]))
-        api_alert = make_api_alert(path="new_file.py")
+        csv_row = make_csv_row(path="old_file.py", url="https://github.com/owner/repo/security/code-scanning/1")
+        by_number, by_location, _ = self._index([csv_row])
+        api_alert = make_api_alert(path="new_file.py", url="https://github.com/owner/repo/security/code-scanning/2")
 
-        stats = update_states("github.com", iter([api_alert]), existing)
+        stats = update_states("github.com", iter([api_alert]), by_number, by_location)
 
         self.assertEqual(stats["unmatched"], 1)
         self.assertEqual(stats["miss_path"], 1)
 
-    def test_start_location_mismatch(self):
-        csv_row = make_csv_row(start_line=10)
-        existing = existing_results_by_location(make_csv_reader([csv_row]))
-        api_alert = make_api_alert(start_line=15)
+    def test_location_mismatch_no_number(self):
+        csv_row = make_csv_row(start_line=10, url="https://github.com/owner/repo/issues/1")
+        by_number, by_location, _ = self._index([csv_row])
+        api_alert = make_api_alert(start_line=15, url="https://github.com/owner/repo/issues/2")
 
-        stats = update_states("github.com", iter([api_alert]), existing)
-
-        self.assertEqual(stats["unmatched"], 1)
-        self.assertEqual(stats["miss_location"], 1)
-
-    def test_end_location_mismatch(self):
-        csv_row = make_csv_row(end_line=10, end_column=20)
-        existing = existing_results_by_location(make_csv_reader([csv_row]))
-        api_alert = make_api_alert(end_line=12, end_column=20)
-
-        stats = update_states("github.com", iter([api_alert]), existing)
+        stats = update_states("github.com", iter([api_alert]), by_number, by_location)
 
         self.assertEqual(stats["unmatched"], 1)
         self.assertEqual(stats["miss_location"], 1)
 
     def test_mixed_matches_and_misses(self):
         csv_rows = [
-            make_csv_row(path="found.py", start_line=10, state="dismissed"),
-            make_csv_row(path="also_found.py", start_line=20, state="open"),
+            make_csv_row(path="found.py", start_line=10, state="dismissed",
+                         url="https://github.com/owner/repo/security/code-scanning/1"),
+            make_csv_row(path="also_found.py", start_line=20, state="open",
+                         url="https://github.com/owner/repo/security/code-scanning/2"),
         ]
-        existing = existing_results_by_location(make_csv_reader(csv_rows))
+        by_number, by_location, _ = self._index(csv_rows)
 
         api_alerts = [
-            make_api_alert(path="found.py", start_line=10, state="open"),
-            make_api_alert(path="also_found.py", start_line=20, state="open"),
-            make_api_alert(path="missing.py", start_line=30, state="open"),
+            make_api_alert(path="found.py", start_line=10, state="open",
+                           url="https://github.com/owner/repo/security/code-scanning/1"),
+            make_api_alert(path="also_found.py", start_line=20, state="open",
+                           url="https://github.com/owner/repo/security/code-scanning/2"),
+            make_api_alert(path="missing.py", start_line=30, state="open",
+                           url="https://github.com/owner/repo/security/code-scanning/99"),
         ]
 
         with patch("replay_code_scanning_alert_status.change_state"):
-            stats = update_states("github.com", iter(api_alerts), existing)
+            stats = update_states("github.com", iter(api_alerts), by_number, by_location)
 
         self.assertEqual(stats["api_alerts"], 3)
         self.assertEqual(stats["matched"], 2)
-        self.assertEqual(stats["state_changed"], 1)  # found.py: dismissed != open
-        self.assertEqual(stats["state_same"], 1)      # also_found.py: open == open
-        self.assertEqual(stats["unmatched"], 1)        # missing.py
+        self.assertEqual(stats["matched_by_number"], 2)
+        self.assertEqual(stats["state_changed"], 1)
+        self.assertEqual(stats["state_same"], 1)
+        self.assertEqual(stats["unmatched"], 1)
         self.assertEqual(stats["miss_path"], 1)
 
     def test_empty_csv_all_unmatched(self):
-        existing = existing_results_by_location(make_csv_reader([]))
+        by_number, by_location, _ = self._index([])
         api_alerts = [make_api_alert(), make_api_alert(path="other.py")]
 
-        stats = update_states("github.com", iter(api_alerts), existing)
+        stats = update_states("github.com", iter(api_alerts), by_number, by_location)
 
         self.assertEqual(stats["api_alerts"], 2)
         self.assertEqual(stats["matched"], 0)
         self.assertEqual(stats["unmatched"], 2)
         self.assertEqual(stats["miss_repo"], 2)
+
+    def test_number_match_takes_priority_over_location(self):
+        """When BOTH number and location could match, number wins."""
+        csv_row = make_csv_row(
+            start_line=10, state="dismissed",
+            url="https://github.com/owner/repo/security/code-scanning/5",
+        )
+        by_number, by_location, _ = self._index([csv_row])
+        api_alert = make_api_alert(
+            start_line=10, state="open",  # location also matches
+            url="https://github.com/owner/repo/security/code-scanning/5",
+        )
+
+        with patch("replay_code_scanning_alert_status.change_state"):
+            stats = update_states("github.com", iter([api_alert]), by_number, by_location)
+
+        self.assertEqual(stats["matched_by_number"], 1)
+        self.assertEqual(stats["matched_by_location"], 0)
 
 
 class TestGitHubAPIHelpers(unittest.TestCase):

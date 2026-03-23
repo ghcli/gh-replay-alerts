@@ -17,48 +17,58 @@ from list_code_scanning_alerts import list_code_scanning_alerts
 
 LOG = logging.getLogger(__name__)
 
+ALERT_NUMBER_RE = re.compile(r"/code-scanning/(\d+)$")
 
-def existing_results_by_location(reader: csv.DictReader) -> dict:
-    """Index results by location for easy lookup."""
 
-    existing_results: dict = {}
+def extract_alert_number(url: str) -> str | None:
+    """Extract alert number from a code-scanning URL."""
+    m = ALERT_NUMBER_RE.search(url)
+    return m.group(1) if m else None
+
+
+def index_csv(reader: csv.DictReader) -> tuple[dict, dict, int]:
+    """Index CSV results by alert number (primary) and location (fallback).
+
+    Returns (by_number, by_location, row_count).
+    - by_number: {(repo, alert_number): row}
+    - by_location: {repo: {path: {start_loc: {end_loc: row}}}}
+    """
+    by_number: dict[tuple[str, str], dict] = {}
+    by_location: dict = {}
     row_count = 0
 
     for result in reader:
         row_count += 1
         repo = result["repo"]
         path = result["path"]
+        url = result.get("url", "")
+
+        # Primary index: alert number from URL
+        alert_num = extract_alert_number(url)
+        if alert_num:
+            by_number[(repo, alert_num)] = result
+
+        # Fallback index: location
         start_line = int(result["start_line"])
         start_column = int(result["start_column"])
         end_line = int(result["end_line"])
         end_column = int(result["end_column"])
-
         start_loc = (start_line, start_column)
         end_loc = (end_line, end_column)
 
-        existing_results[repo] = (
-            {} if repo not in existing_results else existing_results[repo]
-        )
-        existing_results[repo][path] = (
-            {} if path not in existing_results[repo] else existing_results[repo][path]
-        )
-        existing_results[repo][path][start_loc] = (
-            {}
-            if start_loc not in existing_results[repo][path]
-            else existing_results[repo][path][start_loc]
-        )
-        existing_results[repo][path][start_loc][end_loc] = result
+        by_location.setdefault(repo, {}).setdefault(path, {}).setdefault(start_loc, {})[end_loc] = result
 
-    total_files = sum(len(paths) for paths in existing_results.values())
-    LOG.info("CSV loaded: %d rows, %d repos, %d unique files", row_count, len(existing_results), total_files)
-    for repo, paths in existing_results.items():
+    total_files = sum(len(paths) for paths in by_location.values())
+    LOG.info("CSV loaded: %d rows, %d repos, %d unique files, %d with alert numbers",
+             row_count, len(by_location), total_files, len(by_number))
+    for repo, paths in by_location.items():
         alert_count = sum(len(locs) for start_locs in paths.values() for locs in start_locs.values())
         LOG.info("  CSV repo: %s — %d files, %d alerts", repo, len(paths), alert_count)
 
     if row_count == 0:
         LOG.warning("CSV is empty — no existing results to match against. Check stdin/pipe.")
 
-    return existing_results
+    return by_number, by_location, row_count
 
 
 def change_state(hostname, result: dict, res: dict) -> None:
@@ -88,14 +98,16 @@ def change_state(hostname, result: dict, res: dict) -> None:
     return
 
 
-def update_states(hostname: str, results: Iterable[dict], existing_results: dict) -> dict:
-    """Update the state of matching alerts to match the existing results.
+def update_states(hostname: str, results: Iterable[dict], by_number: dict, by_location: dict) -> dict:
+    """Update alert states using cascading match: alert number first, location fallback.
 
     Returns a summary dict with counts for diagnosis.
     """
     stats = {
         "api_alerts": 0,
         "matched": 0,
+        "matched_by_number": 0,
+        "matched_by_location": 0,
         "state_same": 0,
         "state_changed": 0,
         "unmatched": 0,
@@ -108,41 +120,53 @@ def update_states(hostname: str, results: Iterable[dict], existing_results: dict
         stats["api_alerts"] += 1
         repo = result["repo"]
         path = result["path"]
-        start_line = result["start_line"]
-        start_column = result["start_column"]
-        end_line = result["end_line"]
-        end_column = result["end_column"]
-
-        start_loc = (start_line, start_column)
-        end_loc = (end_line, end_column)
+        url = result.get("url", "")
+        start_loc = (result["start_line"], result["start_column"])
+        end_loc = (result["end_line"], result["end_column"])
 
         LOG.debug(f"{repo}, {path}, {start_loc}, {end_loc}")
 
-        # Diagnose WHY the lookup fails
-        if repo not in existing_results:
-            stats["unmatched"] += 1
-            stats["miss_repo"] += 1
-            LOG.debug(f"No CSV data for repo: {repo}")
-            continue
-        if path not in existing_results[repo]:
-            stats["unmatched"] += 1
-            stats["miss_path"] += 1
-            LOG.debug(f"No CSV data for path: {repo}/{path}")
-            continue
-        if start_loc not in existing_results[repo][path]:
-            stats["unmatched"] += 1
-            stats["miss_location"] += 1
-            LOG.debug(f"No CSV match at start {start_loc} in {repo}/{path}")
-            continue
-        if end_loc not in existing_results[repo][path][start_loc]:
-            stats["unmatched"] += 1
-            stats["miss_location"] += 1
-            LOG.debug(f"No CSV match at end {end_loc} (start {start_loc}) in {repo}/{path}")
-            continue
+        res = None
+        match_strategy = None
 
-        res = existing_results[repo][path][start_loc][end_loc]
+        # Strategy 1: Match by alert number (stable across code changes)
+        alert_num = extract_alert_number(url)
+        if alert_num and (repo, alert_num) in by_number:
+            res = by_number[(repo, alert_num)]
+            match_strategy = "number"
+
+        # Strategy 2: Fall back to exact location match
+        if res is None:
+            if repo not in by_location:
+                stats["unmatched"] += 1
+                stats["miss_repo"] += 1
+                LOG.debug(f"No CSV data for repo: {repo}")
+                continue
+            if path not in by_location[repo]:
+                stats["unmatched"] += 1
+                stats["miss_path"] += 1
+                LOG.debug(f"No CSV data for path: {repo}/{path}")
+                continue
+            if start_loc not in by_location[repo][path]:
+                stats["unmatched"] += 1
+                stats["miss_location"] += 1
+                LOG.debug(f"No CSV match at start {start_loc} in {repo}/{path}")
+                continue
+            if end_loc not in by_location[repo][path][start_loc]:
+                stats["unmatched"] += 1
+                stats["miss_location"] += 1
+                LOG.debug(f"No CSV match at end {end_loc} (start {start_loc}) in {repo}/{path}")
+                continue
+            res = by_location[repo][path][start_loc][end_loc]
+            match_strategy = "location"
+
         stats["matched"] += 1
-        LOG.info(f"Matched alert: {repo}/{path} {start_loc}->{end_loc}")
+        if match_strategy == "number":
+            stats["matched_by_number"] += 1
+            LOG.info(f"Matched by alert number #{alert_num}: {repo}/{path}")
+        else:
+            stats["matched_by_location"] += 1
+            LOG.info(f"Matched by location: {repo}/{path} {start_loc}->{end_loc}")
 
         if res["state"] == result["state"]:
             stats["state_same"] += 1
@@ -223,19 +247,19 @@ def main() -> None:
 
     reader = csv.DictReader(sys.stdin)
 
-    existing_results = existing_results_by_location(reader)
-
-    LOG.debug(existing_results)
+    by_number, by_location, csv_row_count = index_csv(reader)
 
     results = list_code_scanning_alerts(name, scope, hostname, state=state, since=since)
 
-    stats = update_states(hostname, results, existing_results)
+    stats = update_states(hostname, results, by_number, by_location)
 
     # Summary — always printed so customer/support can diagnose immediately
     LOG.info("")
     LOG.info("=== Replay Summary ===")
     LOG.info("API alerts processed: %d", stats["api_alerts"])
     LOG.info("Matched to CSV:      %d", stats["matched"])
+    LOG.info("  By alert number:   %d", stats["matched_by_number"])
+    LOG.info("  By location:       %d", stats["matched_by_location"])
     LOG.info("  State already same: %d", stats["state_same"])
     LOG.info("  State changed:      %d", stats["state_changed"])
     LOG.info("Unmatched:            %d", stats["unmatched"])
@@ -248,11 +272,15 @@ def main() -> None:
     if stats["api_alerts"] > 0 and stats["matched"] == 0:
         LOG.warning("")
         LOG.warning("Zero matches found. Common causes:")
-        LOG.warning("  1. Code changed between CSV export and now (line numbers shifted)")
+        LOG.warning("  1. Alerts were re-generated by a new scan (different alert numbers)")
         LOG.warning("  2. CSV repo name doesn't match API repo name")
         LOG.warning("  3. CSV was generated from a different branch or scan")
         if stats["miss_location"] > 0:
-            LOG.warning("  → %d alerts matched repo+path but NOT line/column — likely cause: code edits shifted locations", stats["miss_location"])
+            LOG.warning("  → %d alerts matched repo+path but NOT line/column — code edits shifted locations", stats["miss_location"])
+
+    # Exit non-zero if CSV had data but nothing matched
+    if csv_row_count > 0 and stats["api_alerts"] > 0 and stats["matched"] == 0:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
