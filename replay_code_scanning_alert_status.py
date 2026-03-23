@@ -77,12 +77,16 @@ def change_state(hostname, result: dict, res: dict) -> None:
     g = GitHub(hostname=hostname)
 
     repo_name = result["repo"]
+    target_state = res["state"]
 
-    state_update = {
-        "state": res["state"],
-        "dismissed_reason": res["dismissed_reason"],
-        "dismissed_comment": res["dismissed_comment"],
-    }
+    state_update = {"state": target_state}
+
+    # dismissed_reason and dismissed_comment are only valid when dismissing
+    if target_state == "dismissed":
+        if res.get("dismissed_reason"):
+            state_update["dismissed_reason"] = res["dismissed_reason"]
+        if res.get("dismissed_comment"):
+            state_update["dismissed_comment"] = res["dismissed_comment"]
 
     alert_number = result["url"].split("/")[-1]
 
