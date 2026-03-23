@@ -121,6 +121,121 @@ Alerts are matched using a **cascading strategy**:
 
 The summary shows which strategy matched each alert, so you can diagnose issues immediately.
 
+## Situations & Cheat Sheet
+
+### "Someone re-ran CodeQL and now 2,650 dismissals are gone"
+
+The classic. Someone clicked "Re-run" or changed the default setup. All your carefully triaged false positives? Back to `open`. Your Friday afternoon? Gone.
+
+```bash
+# You DID take a backup... right?
+cat backup_before_rescan.csv | gh replay-alerts owner/repo --scope repo
+# 2,650 alerts restored. Weekend saved.
+```
+
+**Pro tip**: Set up a cron to back up alert states weekly:
+```bash
+gh replay-alerts list owner/repo --scope repo > "alerts-$(date +%Y-%m-%d).csv"
+```
+
+---
+
+### "We migrated from GHES to GHEC and lost all triage"
+
+Migration tools move code, not dismissal states. Your security team spent 3 sprints triaging. Now do it again? No.
+
+```bash
+# On GHES (before migration):
+gh replay-alerts list owner/repo --scope repo --hostname ghes.company.com > triage.csv
+
+# On GHEC (after migration):
+cat triage.csv | gh replay-alerts owner/repo --scope repo
+```
+
+---
+
+### "The intern dismissed everything as 'won't fix' and we need to undo it"
+
+No judgment. We've all been there. (The intern hasn't, but they will be.)
+
+```bash
+# Reopen all dismissed alerts:
+gh replay-alerts list owner/repo --scope repo \
+  | sed 's/,dismissed,/,open,/' \
+  | gh replay-alerts owner/repo --scope repo
+
+# Check your work:
+gh replay-alerts list owner/repo --scope repo --state open | wc -l
+```
+
+---
+
+### "We upgraded CodeQL and all alerts got new numbers"
+
+After a major CodeQL version upgrade, alerts may be regenerated with fresh numbers. The old CSV still has the right states — just needs location fallback.
+
+```bash
+cat pre_upgrade_backup.csv | gh replay-alerts owner/repo --scope repo --debug
+# Watch the summary — "By location: N" means fallback kicked in
+```
+
+---
+
+### "I need to dismiss the same 500 alerts across 10 repos"
+
+You triaged one repo. The other 9 have the same codebase (monorepo forks, template repos). Export once, replay everywhere.
+
+```bash
+gh replay-alerts list owner/golden-repo --scope repo > golden.csv
+
+for repo in repo-1 repo-2 repo-3; do
+  cat golden.csv | gh replay-alerts "owner/$repo" --scope repo
+done
+```
+
+---
+
+### "Audit wants a snapshot of alert states before we touch anything"
+
+Compliance doesn't care about your matching algorithm. They want a CSV with timestamps.
+
+```bash
+gh replay-alerts list owner/repo --scope repo > "audit-$(date +%Y%m%d).csv"
+# Done. That CSV has created_at, state, dismissed_by, dismissed_reason, rule_id — everything.
+```
+
+---
+
+### Quick Reference
+
+```bash
+# === BACKUP ===
+gh replay-alerts list owner/repo --scope repo > backup.csv
+
+# === RESTORE ===
+cat backup.csv | gh replay-alerts owner/repo --scope repo
+
+# === REOPEN ALL DISMISSED ===
+gh replay-alerts list owner/repo --scope repo \
+  | sed 's/,dismissed,/,open,/' \
+  | gh replay-alerts owner/repo --scope repo
+
+# === DISMISS ALL OPEN (careful!) ===
+gh replay-alerts list owner/repo --scope repo \
+  | sed 's/,open,/,dismissed,/' \
+  | gh replay-alerts owner/repo --scope repo
+
+# === CROSS-SERVER (GHES → GHEC) ===
+gh replay-alerts list owner/repo --scope repo --hostname ghes.corp.com > export.csv
+cat export.csv | gh replay-alerts owner/repo --scope repo
+
+# === DRY RUN (just see what would happen) ===
+cat backup.csv | gh replay-alerts owner/repo --scope repo --debug 2>&1 | grep -E "^(INFO|WARNING)"
+
+# === ORG-WIDE BACKUP ===
+gh replay-alerts list my-org --scope org > org-backup.csv
+```
+
 ## License
 
 MIT
