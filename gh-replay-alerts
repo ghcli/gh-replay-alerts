@@ -25,17 +25,25 @@ case "${1:-}" in
         shift
         GH_PROG_NAME="gh replay-alerts list" exec python3 "${SCRIPT_DIR}/list_code_scanning_alerts.py" "$@"
         ;;
-    help|--help|-h)
-        echo "Usage: gh replay-alerts <command> [options]"
+    ""|help|--help|-h)
+        echo "gh replay-alerts — Replay code scanning alert statuses"
         echo ""
-        echo "Commands:"
-        echo "  list <name> --scope repo|org|ent   Export code scanning alerts as CSV"
-        echo "  <name> --scope repo|org|ent        Replay alert states from CSV (stdin)"
+        echo "Usage:"
+        echo "  gh replay-alerts list <name> [options]     Export alerts as CSV/JSON"
+        echo "  gh replay-alerts <name> [options] < csv    Replay states from CSV"
+        echo ""
+        echo "Options:"
+        echo "  --scope repo|org|ent    Scope (default: org)"
+        echo "  --state open|resolved   Filter by state"
+        echo "  --since DATE|Nd         Only alerts after date (e.g. 2024-10-08, 7d)"
+        echo "  --hostname HOST         GHES hostname (default: github.com)"
+        echo "  --json                  Output JSON (list only)"
+        echo "  --debug                 Enable debug logging"
         echo ""
         echo "Examples:"
         echo "  gh replay-alerts list owner/repo --scope repo > alerts.csv"
         echo "  cat alerts.csv | gh replay-alerts owner/repo --scope repo"
-        echo "  gh replay-alerts list owner/repo --scope repo --json"
+        echo "  gh replay-alerts list my-org --since 7d --json"
         echo "  cat alerts.csv | gh replay-alerts owner/repo --scope repo --debug"
         exit 0
         ;;
