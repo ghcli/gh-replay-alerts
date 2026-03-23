@@ -57,28 +57,33 @@ def make_result(
     return result
 
 
+def _sanitize(val) -> str | int:
+    """Replace newlines with \\n so each CSV row stays on one line."""
+    return val.replace("\n", "\\n").replace("\r", "") if isinstance(val, str) else val
+
+
 def to_list(result: dict) -> list[str|int]:
     return [
-        result["created_at"],
-        result["repo"],
-        result["url"],
-        result["state"],
-        result["fixed_at"],
-        result["dismissed_reason"],
-        result["dismissed_at"],
-        result["dismissed_by"],
-        result["dismissed_comment"],
-        result["rule_id"],
-        result["rule_severity"],
-        result["cwe"],
-        result["rule_description"],
-        result["rule_full_description"],
-        result["rule_security_severity_level"],
-        result["rule_help"],
-        result["tool_name"],
-        result["commit_sha"],
-        result["ref"],
-        result["path"],
+        _sanitize(result["created_at"]),
+        _sanitize(result["repo"]),
+        _sanitize(result["url"]),
+        _sanitize(result["state"]),
+        _sanitize(result["fixed_at"]),
+        _sanitize(result["dismissed_reason"]),
+        _sanitize(result["dismissed_at"]),
+        _sanitize(result["dismissed_by"]),
+        _sanitize(result["dismissed_comment"]),
+        _sanitize(result["rule_id"]),
+        _sanitize(result["rule_severity"]),
+        _sanitize(result["cwe"]),
+        _sanitize(result["rule_description"]),
+        _sanitize(result["rule_full_description"]),
+        _sanitize(result["rule_security_severity_level"]),
+        _sanitize(result["rule_help"]),
+        _sanitize(result["tool_name"]),
+        _sanitize(result["commit_sha"]),
+        _sanitize(result["ref"]),
+        _sanitize(result["path"]),
         int(result["start_line"]),
         int(result["start_column"]),
         int(result["end_line"]),

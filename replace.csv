@@ -1,0 +1,270 @@
+created_at,repo,url,state,fixed_at,dismissed_reason,dismissed_at,dismissed_by,dismissed_comment,rule_id,rule_severity,rule_description,rule_full_description,rule_security_severity_level,cwe,rule_help,tool_name,commit_sha,ref,path,start_line,start_column,end_line,end_column
+2023-03-22T15:08:55Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/18,open,,,,,,js/regex-injection,error,400,Regular expression injection,"User input should not be used in regular expressions without first being escaped, otherwise a malicious user may be able to inject an expression that could require exponential time on certain inputs.",high,"# Regular expression injection
+Constructing a regular expression with unsanitized user input is dangerous as a malicious user may be able to modify the meaning of the expression. In particular, such a user may be able to provide a regular expression fragment that takes exponential time in the worst case, and use that to perform a Denial of Service attack.
+
+
+## Recommendation
+Before embedding user input into a regular expression, use a sanitization function such as lodash's `_.escapeRegExp` to escape meta-characters that have special meaning.
+
+
+## Example
+The following example shows a HTTP request parameter that is used to construct a regular expression without sanitizing it first:
+
+
+```javascript
+var express = require('express');
+var app = express();
+
+app.get('/findKey', function(req, res) {
+  var key = req.param(""key""), input = req.param(""input"");
+
+  // BAD: Unsanitized user input is used to construct a regular expression
+  var re = new RegExp(""\\b"" + key + ""=(.*)\n"");
+});
+
+```
+Instead, the request parameter should be sanitized first, for example using the function `_.escapeRegExp` from the lodash package. This ensures that the user cannot insert characters which have a special meaning in regular expressions.
+
+
+```javascript
+var express = require('express');
+var _ = require('lodash');
+var app = express();
+
+app.get('/findKey', function(req, res) {
+  var key = req.param(""key""), input = req.param(""input"");
+
+  // GOOD: User input is sanitized before constructing the regex
+  var safeKey = _.escapeRegExp(key);
+  var re = new RegExp(""\\b"" + safeKey + ""=(.*)\n"");
+});
+
+```
+
+## References
+* OWASP: [Regular expression Denial of Service - ReDoS](https://www.owasp.org/index.php/Regular_expression_Denial_of_Service_-_ReDoS).
+* Wikipedia: [ReDoS](https://en.wikipedia.org/wiki/ReDoS).
+* npm: [lodash](https://www.npmjs.com/package/lodash).
+* Common Weakness Enumeration: [CWE-730](https://cwe.mitre.org/data/definitions/730.html).
+* Common Weakness Enumeration: [CWE-400](https://cwe.mitre.org/data/definitions/400.html).
+",CodeQL,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,118,54,118,60
+2022-09-24T18:42:28Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/17,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,js/unused-local-variable,note,0,"Unused variable, import, function or class","Unused variables, imports, functions or classes may be a symptom of a bug and should be examined carefully.",,"# Unused variable, import, function or class
+Unused local variables make code hard to read and understand. Any computation used to initialize an unused variable is wasted, which may lead to performance problems.
+
+Similarly, unused imports and unused functions or classes can be confusing. They may even be a symptom of a bug caused, for example, by an incomplete refactoring.
+
+
+## Recommendation
+Remove the unused program element.
+
+
+## Example
+In this code, the function `f` initializes a local variable `x` with a call to the function `expensiveComputation`, but later on this variable is never read. Removing `x` would improve code quality and performance.
+
+
+```javascript
+function f() {
+	var x = expensiveComputation();
+	return 23;
+}
+```
+A slightly subtle case is shown below, where a function expression named `f` is assigned to a variable `f`:
+
+
+```javascript
+var f = function f() {
+  return ""Hi!"";
+};
+f();
+```
+Note that this example involves two distinct variables, both named `f`: the global variable to which the function is assigned, and the variable implicitly declared by the function expression. The call to `f()` refers to the former variable, whereas the latter is unused. Hence the example can be rewritten as follows, eliminating the useless variable:
+
+
+```javascript
+var f = function () {
+  return ""Hi!"";
+};
+f();
+```
+A similar situation can occur with ECMAScript 2015 module exports, as shown in the following example:
+
+
+```javascript
+export default function f() {
+  return ""Hi!"";
+};
+```
+Again, the named function expression implicitly declares a variable `f`, but because the export statement is a default export, this variable is unused and can be eliminated:
+
+
+```javascript
+export default function () {
+  return ""Hi!"";
+};
+```
+
+## References
+* Coding Horror: [Code Smells](http://blog.codinghorror.com/code-smells/).
+* Mozilla Developer Network: [Named function expressions](https://developer.mozilla.org/en/docs/web/JavaScript/Reference/Operators/function#Named_function_expression).
+* Mozilla Developer Network: [Using the default export](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/export#Using_the_default_export).
+",CodeQL,6590120029d3ad1fd315d97863d8b81a5e542212,refs/heads/main,replace.js,158,13,158,22
+2022-09-24T18:42:28Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/16,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,js/useless-assignment-to-local,warning,563,Useless assignment to local variable,"An assignment to a local variable that is not used later on, or whose value is always overwritten, has no effect.",,"# Useless assignment to local variable
+A value is assigned to a variable or property, but either that location is never read later on, or its value is always overwritten before being read. This means that the original assignment has no effect, and could indicate a logic error or incomplete code.
+
+
+## Recommendation
+Ensure that you check the control and data flow in the method carefully. If a value is really not needed, consider omitting the assignment. Be careful, though: if the right-hand side has a side-effect (like performing a method call), it is important to keep this to preserve the overall behavior.
+
+
+## Example
+In the following example, the return value of the call to `send` on line 2 is assigned to the local variable `result`, but then never used.
+
+
+```javascript
+function f(x) {
+	var result = send(x);
+	waitForResponse();
+	return getResponse();
+}
+```
+Assuming that `send` returns a status code indicating whether the operation succeeded or not, the value of `result` should be checked, perhaps like this:
+
+
+```javascript
+function f(x) {
+	var result = send(x);
+	// check for error
+	if (result === -1)
+		throw new Error(""send failed"");
+	waitForResponse();
+	return getResponse();
+}
+```
+
+## References
+* Wikipedia: [Dead store](http://en.wikipedia.org/wiki/Dead_store).
+* Common Weakness Enumeration: [CWE-563](https://cwe.mitre.org/data/definitions/563.html).
+",CodeQL,6590120029d3ad1fd315d97863d8b81a5e542212,refs/heads/main,search.js,31,49,31,85
+2022-09-24T18:42:28Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/15,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,js/useless-assignment-to-local,warning,563,Useless assignment to local variable,"An assignment to a local variable that is not used later on, or whose value is always overwritten, has no effect.",,"# Useless assignment to local variable
+A value is assigned to a variable or property, but either that location is never read later on, or its value is always overwritten before being read. This means that the original assignment has no effect, and could indicate a logic error or incomplete code.
+
+
+## Recommendation
+Ensure that you check the control and data flow in the method carefully. If a value is really not needed, consider omitting the assignment. Be careful, though: if the right-hand side has a side-effect (like performing a method call), it is important to keep this to preserve the overall behavior.
+
+
+## Example
+In the following example, the return value of the call to `send` on line 2 is assigned to the local variable `result`, but then never used.
+
+
+```javascript
+function f(x) {
+	var result = send(x);
+	waitForResponse();
+	return getResponse();
+}
+```
+Assuming that `send` returns a status code indicating whether the operation succeeded or not, the value of `result` should be checked, perhaps like this:
+
+
+```javascript
+function f(x) {
+	var result = send(x);
+	// check for error
+	if (result === -1)
+		throw new Error(""send failed"");
+	waitForResponse();
+	return getResponse();
+}
+```
+
+## References
+* Wikipedia: [Dead store](http://en.wikipedia.org/wiki/Dead_store).
+* Common Weakness Enumeration: [CWE-563](https://cwe.mitre.org/data/definitions/563.html).
+",CodeQL,6590120029d3ad1fd315d97863d8b81a5e542212,refs/heads/main,search.js,31,25,31,46
+2022-09-24T18:42:28Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/14,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,js/useless-assignment-to-local,warning,563,Useless assignment to local variable,"An assignment to a local variable that is not used later on, or whose value is always overwritten, has no effect.",,"# Useless assignment to local variable
+A value is assigned to a variable or property, but either that location is never read later on, or its value is always overwritten before being read. This means that the original assignment has no effect, and could indicate a logic error or incomplete code.
+
+
+## Recommendation
+Ensure that you check the control and data flow in the method carefully. If a value is really not needed, consider omitting the assignment. Be careful, though: if the right-hand side has a side-effect (like performing a method call), it is important to keep this to preserve the overall behavior.
+
+
+## Example
+In the following example, the return value of the call to `send` on line 2 is assigned to the local variable `result`, but then never used.
+
+
+```javascript
+function f(x) {
+	var result = send(x);
+	waitForResponse();
+	return getResponse();
+}
+```
+Assuming that `send` returns a status code indicating whether the operation succeeded or not, the value of `result` should be checked, perhaps like this:
+
+
+```javascript
+function f(x) {
+	var result = send(x);
+	// check for error
+	if (result === -1)
+		throw new Error(""send failed"");
+	waitForResponse();
+	return getResponse();
+}
+```
+
+## References
+* Wikipedia: [Dead store](http://en.wikipedia.org/wiki/Dead_store).
+* Common Weakness Enumeration: [CWE-563](https://cwe.mitre.org/data/definitions/563.html).
+",CodeQL,6590120029d3ad1fd315d97863d8b81a5e542212,refs/heads/main,search.js,30,45,30,79
+2022-09-24T18:42:28Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/13,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,js/useless-assignment-to-local,warning,563,Useless assignment to local variable,"An assignment to a local variable that is not used later on, or whose value is always overwritten, has no effect.",,"# Useless assignment to local variable
+A value is assigned to a variable or property, but either that location is never read later on, or its value is always overwritten before being read. This means that the original assignment has no effect, and could indicate a logic error or incomplete code.
+
+
+## Recommendation
+Ensure that you check the control and data flow in the method carefully. If a value is really not needed, consider omitting the assignment. Be careful, though: if the right-hand side has a side-effect (like performing a method call), it is important to keep this to preserve the overall behavior.
+
+
+## Example
+In the following example, the return value of the call to `send` on line 2 is assigned to the local variable `result`, but then never used.
+
+
+```javascript
+function f(x) {
+	var result = send(x);
+	waitForResponse();
+	return getResponse();
+}
+```
+Assuming that `send` returns a status code indicating whether the operation succeeded or not, the value of `result` should be checked, perhaps like this:
+
+
+```javascript
+function f(x) {
+	var result = send(x);
+	// check for error
+	if (result === -1)
+		throw new Error(""send failed"");
+	waitForResponse();
+	return getResponse();
+}
+```
+
+## References
+* Wikipedia: [Dead store](http://en.wikipedia.org/wiki/Dead_store).
+* Common Weakness Enumeration: [CWE-563](https://cwe.mitre.org/data/definitions/563.html).
+",CodeQL,6590120029d3ad1fd315d97863d8b81a5e542212,refs/heads/main,search.js,30,23,30,42
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/12,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,prefer-const,error,0,Require `const` declarations for variables that are never reassigned after declared,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,search.js,29,1,29,6
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/11,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,eqeqeq,error,0,Require the use of `===` and `!==`,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,169,23,169,25
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/10,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,eqeqeq,error,0,Require the use of `===` and `!==`,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,165,23,165,25
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/9,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,eqeqeq,error,0,Require the use of `===` and `!==`,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,164,21,164,23
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/8,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,no-unused-vars,error,0,Disallow unused variables,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,158,13,158,22
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/7,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,eqeqeq,error,0,Require the use of `===` and `!==`,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,126,15,126,17
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/6,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,no-useless-escape,error,0,Disallow unnecessary escape characters,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,112,40,112,41
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/5,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,prefer-const,error,0,Require `const` declarations for variables that are never reassigned after declared,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,69,1,69,7
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/4,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,prefer-const,error,0,Require `const` declarations for variables that are never reassigned after declared,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,68,1,68,6
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/3,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,prefer-const,error,0,Require `const` declarations for variables that are never reassigned after declared,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,67,1,67,5
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/2,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,prefer-const,error,0,Require `const` declarations for variables that are never reassigned after declared,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,66,1,66,7
+2022-09-24T18:39:27Z,devops-testbed/replacor,https://github.com/devops-testbed/replacor/security/code-scanning/1,dismissed,,won't fix,2024-07-29T22:40:47Z,megamanics,,prefer-const,error,0,Require `const` declarations for variables that are never reassigned after declared,,,,ESLint,6af6fc145a79361f4abd56f396782a66f7e455a5,refs/heads/main,replace.js,65,1,65,6
