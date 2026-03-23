@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gh-replay-alerts — GitHub CLI extension
+# Replays code scanning alert statuses from a CSV export onto current alerts.
+#
+# Usage:
+#   cat alerts.csv | gh replay-alerts owner/repo --scope repo
+#   gh replay-alerts my-org --scope org < alerts.csv
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Auto-inject token from gh auth if not already set
+export GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+
+if [[ -z "${GITHUB_TOKEN}" ]]; then
+    echo "Error: No GITHUB_TOKEN found. Run 'gh auth login' first." >&2
+    exit 1
+fi
+
+exec python3 "${SCRIPT_DIR}/replay_code_scanning_alert_status.py" "$@"
