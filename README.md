@@ -1,66 +1,73 @@
 # gh-replay-alerts
 
-A [GitHub CLI](https://cli.github.com/) extension that replays code scanning alert statuses from a CSV export onto current alerts.
-
-## Use Case
-
-When migrating repositories, changing code scanning tools, or restoring alert states after re-scanning, you may need to restore previously dismissed/resolved alert statuses. This extension:
-
-1. Reads a CSV of previous alert statuses (from `gh-list-alerts` or the code scanning API)
-2. Fetches current alerts from the GitHub API
-3. Matches alerts using cascading strategy: alert number first, location fallback
-4. Updates mismatched states via the API
-
-## Installation
+Your code scanning alerts got wiped by a re-scan, a migration, or a well-meaning intern. This tool brings them back. One command. No drama.
 
 ```bash
 gh extension install ghcli/gh-replay-alerts
-```
-
-### Prerequisites
-
-- [GitHub CLI](https://cli.github.com/) (`gh`) — authenticated via `gh auth login`
-- Python 3.10+
-- Python dependencies:
-
-```bash
 pip install tqdm defusedcsv requests
 ```
 
-## Usage
+## TL;DR — Copy These, Thank Me Later
 
 ```bash
-# Export current alerts as CSV
-gh replay-alerts list owner/repo --scope repo > alerts.csv
+# Backup alert states (do this BEFORE you touch anything)
+gh replay-alerts list owner/repo --scope repo > backup.csv
 
-# Export as JSON
-gh replay-alerts list owner/repo --scope repo --json
+# Restore from backup
+cat backup.csv | gh replay-alerts owner/repo --scope repo
 
-# Replay alert states from CSV
-cat alerts.csv | gh replay-alerts owner/repo --scope repo
+# Reopen all dismissed alerts
+gh replay-alerts list owner/repo --scope repo \
+  | sed 's/,dismissed,/,open,/' \
+  | gh replay-alerts owner/repo --scope repo
 
-# Replay for an entire org
-cat alerts.csv | gh replay-alerts my-org --scope org
+# Migrate triage from GHES to GHEC
+gh replay-alerts list owner/repo --scope repo --hostname ghes.corp.com > export.csv
+cat export.csv | gh replay-alerts owner/repo --scope repo
 
-# With debug output for diagnosis
-cat alerts.csv | gh replay-alerts owner/repo --scope repo --debug
+# Dry run (see what would happen without changing anything)
+cat backup.csv | gh replay-alerts owner/repo --scope repo --debug 2>&1 | grep -E "^(INFO|WARNING)"
 
-# Filter by state
-cat alerts.csv | gh replay-alerts owner/repo --scope repo --state open
-
-# Filter by date
-gh replay-alerts list owner/repo --scope repo --since 7d > recent.csv
-
-# GitHub Enterprise Server
-gh replay-alerts list owner/repo --scope repo --hostname ghes.example.com > alerts.csv
+# Org-wide backup
+gh replay-alerts list my-org --scope org > org-backup.csv
 
 # Show help
 gh replay-alerts help
 ```
 
-## Output
+## What It Does
 
-The extension always prints a diagnostic summary:
+Reads a CSV of previous alert states. Fetches current alerts from GitHub. Matches them. PATCHes the mismatches. No magic. Just the API, used correctly.
+
+Matching uses a **cascading strategy** because the world is messy:
+
+1. **Alert number** (primary) — stable across code changes. Extracted from the URL.
+2. **File location** (fallback) — `(path, line, column)`. For when alert numbers change after a re-scan or tool upgrade.
+
+The summary tells you which strategy matched each alert. You are never guessing.
+
+## Commands & Options
+
+| Command | What it does |
+|---------|-------------|
+| `gh replay-alerts list <name> [opts]` | Export alerts as CSV or JSON |
+| `gh replay-alerts <name> [opts]` | Replay states from CSV on stdin |
+| `gh replay-alerts help` | Show usage |
+
+| Option | Applies to | Description |
+|--------|-----------|-------------|
+| `--scope repo\|org\|ent` | both | Scope of the query (default: `org`) |
+| `--state open\|resolved` | both | Filter by state |
+| `--since DATE\|Nd` | both | Only alerts after date (`2024-10-08`, `7d`) |
+| `--hostname HOST` | both | GHES hostname (default: `github.com`) |
+| `--debug` | both | Verbose logging |
+| `--json` | list | JSON instead of CSV |
+| `--raw` | list | Raw API JSON |
+| `--quote-all` | list | Quote all CSV fields |
+
+## What the Output Looks Like
+
+Every run prints a diagnostic summary. No silent failures. No guessing.
 
 ```
 INFO:  CSV loaded: 2650 rows, 1 repos, 2650 unique files, 2650 with alert numbers
@@ -78,7 +85,7 @@ INFO:    Location mismatch:  3
 INFO:  ======================
 ```
 
-If zero matches are found, it auto-diagnoses the likely cause:
+Zero matches? It tells you why:
 
 ```
 WARNING: Zero matches found. Common causes:
@@ -88,78 +95,43 @@ WARNING:   3. CSV was generated from a different branch or scan
 WARNING:   → 12 alerts matched repo+path but NOT line/column — code edits shifted locations
 ```
 
-The script exits with code 1 when CSV has data but zero alerts matched.
+Exits with code 1 when CSV has data but nothing matched. Because silent success on total failure is a bug, not a feature.
 
-## Commands
+---
 
-| Command | Description |
-|---------|-------------|
-| `gh replay-alerts list <name> [options]` | Export code scanning alerts as CSV (or JSON) |
-| `gh replay-alerts <name> [options]` | Replay alert states from CSV on stdin |
-| `gh replay-alerts help` | Show usage help |
+## 10 Scenarios Where This Tool Saves Your Day
 
-## Options
+### 1. Someone re-ran CodeQL and 2,650 dismissals vanished
 
-| Flag | Applies to | Description |
-|------|-----------|-------------|
-| `name` | both | Repository (`owner/repo`), org, or Enterprise name |
-| `--scope` | both | `repo`, `org`, or `ent` (default: `org`) |
-| `--state` | both | Filter: `open` or `resolved` |
-| `--since` | both | Only alerts after date (`2024-10-08`, `7d`) |
-| `--hostname` | both | GHES hostname (default: `github.com`) |
-| `--debug` | both | Enable debug logging |
-| `--json` | list | Output JSON instead of CSV |
-| `--raw` | list | Output raw API JSON |
-| `--quote-all` | list | Quote all CSV fields |
-
-## How Matching Works
-
-Alerts are matched using a **cascading strategy**:
-
-1. **Alert number** (primary) — extracted from the `url` field in the CSV (e.g., `.../code-scanning/42` → `#42`). Stable across code changes.
-2. **Exact location** (fallback) — `(repo, path, start_line, start_column, end_line, end_column)`. Used when alert numbers don't match (e.g., alerts regenerated by a new scan).
-
-The summary shows which strategy matched each alert, so you can diagnose issues immediately.
-
-## 10 Real-World Scenarios Where Replay Alerts Saves the Day
-
-### 1. "Someone re-ran CodeQL and now 2,650 dismissals are gone"
-
-The classic Friday afternoon disaster. Someone clicked "Re-run all jobs" or changed the default setup config. All your carefully triaged false positives? Back to `open`. Your weekend plans? Also open to interpretation.
+The classic. Someone clicked "Re-run all jobs." Your carefully triaged false positives? Back to open. Your weekend plans? Also open to interpretation.
 
 ```bash
 cat backup_before_rescan.csv | gh replay-alerts owner/repo --scope repo
-# 2,650 alerts restored. Weekend saved. Hero status achieved.
 ```
 
-**Pro tip** — set up a cron so you always have a backup. Future-you will thank present-you:
+Set up a cron. Future-you will thank present-you:
 ```bash
 gh replay-alerts list owner/repo --scope repo > "alerts-$(date +%Y-%m-%d).csv"
 ```
 
 ---
 
-### 2. "We migrated from GHES to GHEC and lost all triage"
+### 2. GHES to GHEC migration wiped all triage
 
-Migration tools move code, issues, PRs... but not alert dismissal states. Your security team spent 3 sprints triaging 4,000 alerts. The migration tool said "success." The security dashboard said "4,000 open alerts." The security team said things we can't print here.
+Migration tools move code. They do not move dismissal states. Your security team spent 3 sprints triaging 4,000 alerts. The migration tool said success. The dashboard said 4,000 open. The security team said things we cannot print.
 
 ```bash
-# On GHES (before you pull the plug):
 gh replay-alerts list owner/repo --scope repo --hostname ghes.company.com > triage.csv
-
-# On GHEC (after migration):
 cat triage.csv | gh replay-alerts owner/repo --scope repo
-# 3 sprints of triage restored in 30 seconds. Migration complete for real this time.
 ```
 
 ---
 
-### 3. "The intern dismissed everything as 'won't fix'"
+### 3. The intern dismissed everything as won't fix
 
-No judgment. We've all been the intern. (The intern hasn't been the intern yet, but they will be — and they'll understand why you bookmarked this section.)
+No judgment. We have all been the intern.
 
 ```bash
-# Undo the Great Dismissal of 2026:
 gh replay-alerts list owner/repo --scope repo \
   | sed 's/,dismissed,/,open,/' \
   | gh replay-alerts owner/repo --scope repo
@@ -167,20 +139,19 @@ gh replay-alerts list owner/repo --scope repo \
 
 ---
 
-### 4. "We upgraded CodeQL and all alerts got new numbers"
+### 4. CodeQL upgrade regenerated all alert numbers
 
-Major CodeQL version upgrades can regenerate alerts with fresh IDs. Your old backup CSV has the right triage decisions — they just need to match by location instead of alert number. The cascading strategy was literally built for this.
+Major version upgrades regenerate alerts with fresh IDs. Your backup CSV has the right triage decisions. The cascading strategy matches by location when numbers change.
 
 ```bash
 cat pre_upgrade_backup.csv | gh replay-alerts owner/repo --scope repo --debug
-# Watch the summary — "By location: N" means the fallback saved you
 ```
 
 ---
 
-### 5. "I need to dismiss the same 500 alerts across 10 repos"
+### 5. Same 500 alerts across 10 repos
 
-You triaged one golden repo. The other 9 are forks, template repos, or microservices with the same base code. Triage once, replay everywhere. Your security team calls this "scalable triage." You call it "not doing the same thing 10 times."
+Triage one golden repo. Replay everywhere.
 
 ```bash
 gh replay-alerts list owner/golden-repo --scope repo > golden.csv
@@ -188,112 +159,72 @@ gh replay-alerts list owner/golden-repo --scope repo > golden.csv
 for repo in repo-1 repo-2 repo-3 repo-4 repo-5 repo-6 repo-7 repo-8 repo-9; do
   cat golden.csv | gh replay-alerts "owner/$repo" --scope repo
 done
-# 9 repos triaged while you were getting coffee.
 ```
 
 ---
 
-### 6. "Audit wants a snapshot of alert states before we touch anything"
+### 6. Audit wants a snapshot before you touch anything
 
-Compliance doesn't care about cascading match strategies. They want a CSV with timestamps, who dismissed what, and why. They want it yesterday. They want it in a format that opens in Excel.
+Compliance wants a CSV with timestamps, who dismissed what, and why. They want it yesterday.
 
 ```bash
 gh replay-alerts list owner/repo --scope repo > "audit-$(date +%Y%m%d).csv"
-# Done. created_at, state, dismissed_by, dismissed_reason, rule_id — everything auditors dream about.
 ```
 
 ---
 
-### 7. "We switched default branches and all alert states reset"
+### 7. Default branch switch reset all alert states
 
-Changing from `master` to `main` (or any branch switch) can reset alert states because alerts are branch-scoped. Suddenly your dashboard is red again and your CISO is asking questions.
+master to main can reset alert states because alerts are branch-scoped.
 
 ```bash
-# Before the branch rename:
 gh replay-alerts list owner/repo --scope repo > pre-rename.csv
-
-# After the chaos:
+# rename branch
 cat pre-rename.csv | gh replay-alerts owner/repo --scope repo
-# Branch renamed. Alerts restored. CISO appeased.
 ```
 
 ---
 
-### 8. "Someone deleted and re-created the repo during a migration"
+### 8. Repo deleted and re-created during migration
 
-It happens more than anyone admits. The repo was deleted, re-created from the same source, and now has a fresh set of wide-open alerts. The git history is the same. The alert numbers are not.
+Same code, fresh alert numbers. Location fallback handles it.
 
 ```bash
-# Location fallback to the rescue:
 cat old_repo_backup.csv | gh replay-alerts owner/new-repo --scope repo --debug
-# Matches by file + line since alert numbers are different. Git remembers even when humans forget.
 ```
 
 ---
 
-### 9. "We need to bulk-dismiss all low-severity alerts before a release"
+### 9. Bulk-dismiss low-severity noise before a release
 
-Release day. 200 low-severity informational alerts are cluttering the dashboard. The real vulnerabilities are hiding in the noise. Time to clear the deck — temporarily.
+Clear the deck temporarily. Restore after.
 
 ```bash
-# Save current state (you'll want this back after the release):
-gh replay-alerts list owner/repo --scope repo > pre-release-backup.csv
-
-# Dismiss the noise (your API team will know how to filter by severity):
-gh replay-alerts list owner/repo --scope repo --json \
-  | python3 -c "import sys,json; [print(a['url'].split('/')[-1]) for a in json.load(sys.stdin) if a.get('rule_severity')=='warning']"
-# Then use the API to dismiss those specific alerts
-
-# After release — restore everything:
-cat pre-release-backup.csv | gh replay-alerts owner/repo --scope repo
+gh replay-alerts list owner/repo --scope repo > pre-release.csv
+# dismiss the noise via API
+cat pre-release.csv | gh replay-alerts owner/repo --scope repo
 ```
 
 ---
 
-### 10. "It's 3am, the security dashboard is red, and nobody knows what changed"
+### 10. 3am. Dashboard red. Nobody knows what changed.
 
-The on-call nightmare. Dashboard went from green to red. 500 alerts appeared overnight. Was it a new scan? A config change? A well-meaning automation? You don't know and you don't have time to find out. But you DO have last night's backup.
+You do not know what changed. You do not have time to find out. But you have last night's backup.
 
 ```bash
-# Restore last known good state:
 cat alerts-2026-03-22.csv | gh replay-alerts owner/repo --scope repo
-
-# Read the summary to understand what happened:
-# "Matched: 500, By alert number: 500, State changed: 487"
-# → Same alerts, someone changed the states. Now they're back. Go back to sleep.
 ```
 
 ---
 
-## Quick Reference
+## Installation
 
 ```bash
-# === BACKUP ===
-gh replay-alerts list owner/repo --scope repo > backup.csv
-
-# === RESTORE ===
-cat backup.csv | gh replay-alerts owner/repo --scope repo
-
-# === REOPEN ALL DISMISSED ===
-gh replay-alerts list owner/repo --scope repo \
-  | sed 's/,dismissed,/,open,/' \
-  | gh replay-alerts owner/repo --scope repo
-
-# === DISMISS ALL OPEN (careful!) ===
-gh replay-alerts list owner/repo --scope repo \
-  | sed 's/,open,/,dismissed,/' \
-  | gh replay-alerts owner/repo --scope repo
-
-# === CROSS-SERVER (GHES → GHEC) ===
-gh replay-alerts list owner/repo --scope repo --hostname ghes.corp.com > export.csv
-cat export.csv | gh replay-alerts owner/repo --scope repo
-
-# === DRY RUN (just see what would happen) ===
-cat backup.csv | gh replay-alerts owner/repo --scope repo --debug 2>&1 | grep -E "^(INFO|WARNING)"
-
-# === ORG-WIDE BACKUP ===
-gh replay-alerts list my-org --scope org > org-backup.csv
+gh extension install ghcli/gh-replay-alerts
+pip install tqdm defusedcsv requests
 ```
+
+Requires [GitHub CLI](https://cli.github.com/) (`gh auth login`) and Python 3.10+.
 
 ## License
 
